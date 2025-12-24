@@ -74,18 +74,14 @@ class MainActivity : ComponentActivity() {
                                 stopTone()
                             }
                         },
-                        onTunerStartStop = { shouldStart ->
-                            if (shouldStart) {
-                                startTuner()
-                            } else {
-                                stopTuner()
-                            }
-                        },
                         detectedFrequency = detectedFreq
                     )
                 }
             }
         }
+        
+        // Start tuner automatically
+        startTuner()
     }
 
     private fun startTone(frequency: Double) {
@@ -243,6 +239,15 @@ class MainActivity : ComponentActivity() {
         }
     }
     
+    override fun onResume() {
+        super.onResume()
+        // Start tuner if permission is granted and not already recording
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) 
+            == PackageManager.PERMISSION_GRANTED && !isRecording) {
+            startTuner()
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         stopTone()
@@ -253,12 +258,9 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun DroneToneScreen(
     onPlayStopClick: (Double, Boolean) -> Unit,
-    onTunerStartStop: (Boolean) -> Unit,
     detectedFrequency: Double
 ) {
-    var mode by remember { mutableStateOf("Drone") } // "Drone" or "Tuner"
     var isPlaying by remember { mutableStateOf(false) }
-    var isTuning by remember { mutableStateOf(false) }
     var showPitchSelector by remember { mutableStateOf(false) }
     
     // Chromatic note selection: 0 = C, 1 = C#, 2 = D, ..., 11 = B
@@ -290,15 +292,10 @@ fun DroneToneScreen(
     
     // Update audio when frequency changes while playing
     LaunchedEffect(selectedFrequency, isPlaying) {
-        if (isPlaying && mode == "Drone") {
+        if (isPlaying) {
             onPlayStopClick(selectedFrequency, false)
             onPlayStopClick(selectedFrequency, true)
         }
-    }
-    
-    // Update tuner state
-    LaunchedEffect(isTuning) {
-        onTunerStartStop(isTuning)
     }
 
     Column(
@@ -313,122 +310,101 @@ fun DroneToneScreen(
             style = MaterialTheme.typography.headlineMedium,
             modifier = Modifier.padding(top = 16.dp, bottom = 8.dp)
         )
-        
-        // Mode selector
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.Center
-        ) {
-            FilterChip(
-                selected = mode == "Drone",
-                onClick = { mode = "Drone" },
-                label = { Text("Drone") },
-                modifier = Modifier.padding(end = 8.dp)
-            )
-            FilterChip(
-                selected = mode == "Tuner",
-                onClick = { mode = "Tuner" },
-                label = { Text("Tuner") }
-            )
-        }
 
-        // Current note and frequency display
-        if (mode == "Drone") {
-            // Drone mode: clickable to show/hide pitch selector
-            Card(
+        // Tuner display (always visible)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.secondaryContainer
+            ),
+            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+        ) {
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { showPitchSelector = !showPitchSelector },
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer
-                ),
-                elevation = CardDefaults.cardElevation(
-                    defaultElevation = if (showPitchSelector) 8.dp else 4.dp
-                )
+                    .padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(20.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
+                Text(
+                    text = "Tuner",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+                Text(
+                    text = tunerNoteName,
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+                if (detectedFrequency > 0) {
                     Text(
-                        text = currentNoteName,
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                    Text(
-                        text = "${String.format("%.2f", selectedFrequency)} Hz",
+                        text = "${String.format("%.2f", detectedFrequency)} Hz",
                         style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                        color = MaterialTheme.colorScheme.onSecondaryContainer
                     )
                     Text(
-                        text = if (showPitchSelector) "Tap to hide selector" else "Tap to select pitch",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
+                        text = "${if (tunerCents >= 0) "+" else ""}${String.format("%.1f", tunerCents)} cents",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
                         modifier = Modifier.padding(top = 4.dp)
                     )
-                }
-            }
-        } else {
-            // Tuner mode: show detected frequency and note
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = if (isTuning) 
-                        MaterialTheme.colorScheme.secondaryContainer 
-                    else 
-                        MaterialTheme.colorScheme.surfaceVariant
-                ),
-                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(20.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
+                } else {
                     Text(
-                        text = tunerNoteName,
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = if (isTuning) 
-                            MaterialTheme.colorScheme.onSecondaryContainer 
-                        else 
-                            MaterialTheme.colorScheme.onSurfaceVariant
+                        text = "No signal detected",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
                     )
-                    if (detectedFrequency > 0) {
-                        Text(
-                            text = "${String.format("%.2f", detectedFrequency)} Hz",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = if (isTuning) 
-                                MaterialTheme.colorScheme.onSecondaryContainer 
-                            else 
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            text = "${if (tunerCents >= 0) "+" else ""}${String.format("%.1f", tunerCents)} cents",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = if (isTuning) 
-                                MaterialTheme.colorScheme.onSecondaryContainer 
-                            else 
-                                MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(top = 4.dp)
-                        )
-                    } else {
-                        Text(
-                            text = "No signal detected",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                        )
-                    }
                 }
             }
         }
 
-        // Pitch selector (shown when button is pressed in Drone mode)
-        if (showPitchSelector && mode == "Drone") {
+        // Drone tone display (clickable to show/hide pitch selector)
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { showPitchSelector = !showPitchSelector },
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer
+            ),
+            elevation = CardDefaults.cardElevation(
+                defaultElevation = if (showPitchSelector) 8.dp else 4.dp
+            )
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "Drone Tone",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+                Text(
+                    text = currentNoteName,
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+                Text(
+                    text = "${String.format("%.2f", selectedFrequency)} Hz",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+                Text(
+                    text = if (showPitchSelector) "Tap to hide selector" else "Tap to select pitch",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+        }
+
+        // Pitch selector (shown when button is pressed)
+        if (showPitchSelector) {
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(
@@ -494,48 +470,26 @@ fun DroneToneScreen(
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Mode-specific button
-        if (mode == "Drone") {
-            Button(
-                onClick = {
-                    isPlaying = !isPlaying
-                    onPlayStopClick(selectedFrequency, isPlaying)
-                },
-                modifier = Modifier
-                    .width(200.dp)
-                    .height(60.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isPlaying) 
-                        MaterialTheme.colorScheme.error 
-                    else 
-                        MaterialTheme.colorScheme.primary
-                )
-            ) {
-                Text(
-                    text = if (isPlaying) "Stop" else "Play",
-                    style = MaterialTheme.typography.titleLarge
-                )
-            }
-        } else {
-            Button(
-                onClick = {
-                    isTuning = !isTuning
-                },
-                modifier = Modifier
-                    .width(200.dp)
-                    .height(60.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isTuning) 
-                        MaterialTheme.colorScheme.error 
-                    else 
-                        MaterialTheme.colorScheme.primary
-                )
-            ) {
-                Text(
-                    text = if (isTuning) "Stop Tuning" else "Start Tuning",
-                    style = MaterialTheme.typography.titleLarge
-                )
-            }
+        // Play/Stop button for drone tone
+        Button(
+            onClick = {
+                isPlaying = !isPlaying
+                onPlayStopClick(selectedFrequency, isPlaying)
+            },
+            modifier = Modifier
+                .width(200.dp)
+                .height(60.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = if (isPlaying) 
+                    MaterialTheme.colorScheme.error 
+                else 
+                    MaterialTheme.colorScheme.primary
+            )
+        ) {
+            Text(
+                text = if (isPlaying) "Stop" else "Play",
+                style = MaterialTheme.typography.titleLarge
+            )
         }
     }
 }
