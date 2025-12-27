@@ -40,6 +40,7 @@ class MainActivity : ComponentActivity() {
     private var recordingThread: Thread? = null
     private var detectedFrequencyState = mutableStateOf(0.0)
     private val mainHandler = Handler(Looper.getMainLooper())
+    @Volatile private var activeDroneFrequency = 0.0 // Thread-safe drone frequency
     
     companion object {
         private const val RECORD_AUDIO_PERMISSION_CODE = 100
@@ -122,6 +123,9 @@ class MainActivity : ComponentActivity() {
             currentPhase = 0.0
             currentFrequency = frequency
         }
+        
+        // Update active drone frequency for tuner filtering
+        activeDroneFrequency = frequency
 
         val twoPi = 2.0 * Math.PI
         val increment = (twoPi * frequency) / sampleRate
@@ -157,6 +161,8 @@ class MainActivity : ComponentActivity() {
         audioTrack?.stop()
         audioTrack?.release()
         audioTrack = null
+        // Clear active drone frequency when stopped
+        activeDroneFrequency = 0.0
         // Don't reset phase here - keep it for smooth transitions when changing frequency
     }
 
@@ -190,7 +196,13 @@ class MainActivity : ComponentActivity() {
             while (isRecording) {
                 val read = audioRecord?.read(buffer, 0, buffer.size) ?: 0
                 if (read > 0) {
-                    val frequency = detectFrequency(buffer, SAMPLE_RATE)
+                    // Filter out drone tone if active
+                    val filteredBuffer = if (activeDroneFrequency > 0) {
+                        filterDroneTone(buffer, activeDroneFrequency, SAMPLE_RATE)
+                    } else {
+                        buffer
+                    }
+                    val frequency = detectFrequency(filteredBuffer, SAMPLE_RATE, activeDroneFrequency)
                     if (frequency > 0) {
                         mainHandler.post {
                             detectedFrequencyState.value = frequency
@@ -211,15 +223,52 @@ class MainActivity : ComponentActivity() {
         detectedFrequencyState.value = 0.0
     }
     
-    private fun detectFrequency(buffer: ShortArray, sampleRate: Int): Double {
+    private fun filterDroneTone(buffer: ShortArray, droneFreq: Double, sampleRate: Int): ShortArray {
+        // Apply a simple notch filter to remove the drone tone frequency
+        // This uses a comb filter approach to cancel out the known frequency
+        val filtered = ShortArray(buffer.size)
+        val period = (sampleRate / droneFreq).toInt()
+        val halfPeriod = period / 2
+        
+        for (i in buffer.indices) {
+            if (i >= period) {
+                // Subtract delayed version to cancel the periodic drone tone
+                val delayed = buffer[i - period].toInt()
+                val current = buffer[i].toInt()
+                filtered[i] = ((current - delayed * 0.5).toInt().coerceIn(-32768, 32767)).toShort()
+            } else {
+                filtered[i] = buffer[i]
+            }
+        }
+        return filtered
+    }
+    
+    private fun detectFrequency(buffer: ShortArray, sampleRate: Int, ignoreFreq: Double = 0.0): Double {
         // Use autocorrelation to find fundamental frequency
         val minPeriod = sampleRate / 2000 // Max frequency ~2000 Hz
         val maxPeriod = sampleRate / 80   // Min frequency ~80 Hz
+        
+        // Calculate period range to ignore (drone tone frequency ± tolerance)
+        val ignorePeriodMin = if (ignoreFreq > 0) {
+            (sampleRate / (ignoreFreq * 1.1)).toInt() // 10% tolerance
+        } else {
+            -1
+        }
+        val ignorePeriodMax = if (ignoreFreq > 0) {
+            (sampleRate / (ignoreFreq * 0.9)).toInt()
+        } else {
+            -1
+        }
         
         var maxCorrelation = 0.0
         var bestPeriod = 0
         
         for (period in minPeriod until minOf(maxPeriod, buffer.size / 2)) {
+            // Skip periods that match the drone tone frequency
+            if (ignoreFreq > 0 && period in ignorePeriodMin..ignorePeriodMax) {
+                continue
+            }
+            
             var correlation = 0.0
             for (i in 0 until buffer.size - period) {
                 correlation += (buffer[i].toInt() * buffer[i + period].toInt())
